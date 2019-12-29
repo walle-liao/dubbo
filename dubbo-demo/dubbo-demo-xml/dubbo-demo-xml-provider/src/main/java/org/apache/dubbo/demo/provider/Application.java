@@ -16,12 +16,22 @@
  */
 package org.apache.dubbo.demo.provider;
 
+import org.apache.dubbo.common.extension.ExtensionLoader;
+import org.apache.dubbo.rpc.Protocol;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 
 public class Application {
     public static void main(String[] args) throws Exception {
         ClassPathXmlApplicationContext context = new ClassPathXmlApplicationContext("spring/dubbo-provider.xml");
         context.start();
+
+        /**
+         * #getExtension("demo") 方法的参数 "demo"
+         * 对应的就是 resources\META-INF\dubbo\org.apache.dubbo.rpc.Protocol 配置文件中的名称（=号前面的那个名称）
+         */
+        Protocol protocol = ExtensionLoader.getExtensionLoader(Protocol.class).getExtension("demo");
+        System.out.println(protocol.getDefaultPort());
+
         System.in.read();
     }
 }

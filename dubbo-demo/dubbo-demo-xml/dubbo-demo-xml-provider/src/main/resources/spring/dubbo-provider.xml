@@ -23,12 +23,17 @@
 
     <dubbo:application name="demo-provider"/>
 
-    <dubbo:registry address="zookeeper://127.0.0.1:2181"/>
+    <dubbo:registry address="zookeeper://192.168.0.56:2181"/>
 
     <dubbo:protocol name="dubbo"/>
 
     <bean id="demoService" class="org.apache.dubbo.demo.provider.DemoServiceImpl"/>
 
     <dubbo:service interface="org.apache.dubbo.demo.DemoService" ref="demoService"/>
+
+    <!-- 测试 spring 容器管理的该 bean 实例能够被自动注入到 SPI 实现类 DemoProtocol 对象中 -->
+    <bean id="myService" class="org.apache.dubbo.demo.provider.MyService">
+        <property name="port" value="666" />
+    </bean>
 
 </beans>

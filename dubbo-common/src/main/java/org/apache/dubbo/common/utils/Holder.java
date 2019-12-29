@@ -16,11 +16,20 @@
  */
 package org.apache.dubbo.common.utils;
 
+import org.apache.dubbo.common.extension.ExtensionLoader;
+
 /**
  * Helper Class for hold a value.
  */
 public class Holder<T> {
 
+    /**
+     * 这里这个 value 为啥要用 volatile 修饰？
+     * 因为 Holder 对象本身是放在 ConcurrentMap 中，获取对象本身是不加锁访问的
+     * 对应的访问 Holder 对象中的 value 对象（{@link #get()} 的调用）也是不加锁的，如果不用 volatile 修饰就要悲剧了
+     *
+     * @see ExtensionLoader#getExtension(java.lang.String) line 431
+     */
     private volatile T value;
 
     public void set(T value) {

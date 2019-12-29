@@ -18,6 +18,7 @@ package org.apache.dubbo.common.extension;
 
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.context.Lifecycle;
+import org.apache.dubbo.common.extension.factory.AdaptiveExtensionFactory;
 import org.apache.dubbo.common.extension.support.ActivateComparator;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
@@ -29,6 +30,7 @@ import org.apache.dubbo.common.utils.ConfigUtils;
 import org.apache.dubbo.common.utils.Holder;
 import org.apache.dubbo.common.utils.ReflectUtils;
 import org.apache.dubbo.common.utils.StringUtils;
+import org.apache.dubbo.event.EventDispatcher;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -76,33 +78,80 @@ public class ExtensionLoader<T> {
 
     private static final Logger logger = LoggerFactory.getLogger(ExtensionLoader.class);
 
+    // 兼容 java 原生 SPI 实现存放路径
     private static final String SERVICES_DIRECTORY = "META-INF/services/";
 
+    // 用户自定义 SPI 实现存放路径
     private static final String DUBBO_DIRECTORY = "META-INF/dubbo/";
 
+    // dubbo 内置 SPI 实现存放路径
     private static final String DUBBO_INTERNAL_DIRECTORY = DUBBO_DIRECTORY + "internal/";
 
     private static final Pattern NAME_SEPARATOR = Pattern.compile("\\s*[,]+\\s*");
 
     private static final ConcurrentMap<Class<?>, ExtensionLoader<?>> EXTENSION_LOADERS = new ConcurrentHashMap<>();
 
+    /**
+     * 所有已经创建的 ExtensionLoader
+     */
     private static final ConcurrentMap<Class<?>, Object> EXTENSION_INSTANCES = new ConcurrentHashMap<>();
 
     private final Class<?> type;
 
+    /**
+     * bean 工厂，用于 dubbo 的 SPI 实现类实例化之后的依赖注入
+     *
+     * 当 {@link #type == ExtensionFactory} 时，该属性为 null
+     * @see ExtensionLoader#ExtensionLoader(java.lang.Class)
+     */
     private final ExtensionFactory objectFactory;
 
     private final ConcurrentMap<Class<?>, String> cachedNames = new ConcurrentHashMap<>();
 
+    /**
+     * 存放的是当前 SPI 配置的所有实现
+     * 例如： ExtensionFactory.class -> {spi:SpiExtensionFactory, spring:SpringExtensionFactory}）
+     * 但是 {@link Adaptive} 注解的 SPI 实现，不存放在该 cache 中，而是单独设置在 {@link ExtensionLoader#cachedAdaptiveClass} 属性中
+     */
     private final Holder<Map<String, Class<?>>> cachedClasses = new Holder<>();
 
     private final Map<String, Object> cachedActivates = new ConcurrentHashMap<>();
+
+    /**
+     * ConcurrentMap<String, Holder<Object>> map 的 value 是个 Holder 而不是直接的 SPI 实现类对象（TODO: 大概是为了延迟加载吧？）
+     * 这个 map 有个延迟加载的作用，而真正的实现类的缓存在 {@link ExtensionLoader#EXTENSION_INSTANCES} 这个 map 中，后面这个 map 中的 value 也就是这个 map 的 {@link Holder#value}
+     * 另外，这个 map 是对象的属性，只会存该 SPI 对应的扩展实现 {@link ExtensionLoader#EXTENSION_INSTANCES} 存的是所有 SPI 的所有实现
+     */
     private final ConcurrentMap<String, Holder<Object>> cachedInstances = new ConcurrentHashMap<>();
+
+    /**
+     * {@link #cachedAdaptiveClass} 对应的实例
+     */
     private final Holder<Object> cachedAdaptiveInstance = new Holder<>();
+
+    /**
+     * 只有 {@link #type == ExtensionFactory} 时，该字段才有值，为 {@link AdaptiveExtensionFactory}
+     * 因为 {@link Adaptive} 注解用在类上面的用法，只有 {@link AdaptiveExtensionFactory} 这一个类
+     */
     private volatile Class<?> cachedAdaptiveClass = null;
+
+    /**
+     * 存放的是 default name，也就是 {@link SPI} 注解属性上标识的默认的实现名
+     *
+     * @see EventDispatcher // @SPI("direct") 其中 'direct' 这个名称对应的实现，就是该 SPI 接口的默认实现
+     */
     private String cachedDefaultName;
     private volatile Throwable createAdaptiveInstanceError;
 
+    /**
+     * Wrapper 本身也是实现 SPI 接口的实现类，但是 Wrapper 和正常的实现类的区别是：
+     * Wrapper 类的职责更偏向于是封装所有实现类的公共逻辑，在所有正常的扩展类上添加逻辑，有些类似 AOP
+     * 例如 {@link org.apache.dubbo.rpc.protocol.ProtocolFilterWrapper}
+     *
+     * 带唯一参数为拓展接口的构造方法的实现类，或者说拓展 Wrapper 实现类。
+     * 总结来说，cachedClasses + cachedAdaptiveClass + cachedWrapperClasses 才是 SPI 完整缓存的拓展实现类的配置。
+     * @see ExtensionLoader#loadClass
+     */
     private Set<Class<?>> cachedWrapperClasses;
 
     private Map<String, IllegalStateException> exceptions = new ConcurrentHashMap<>();
@@ -625,6 +674,16 @@ public class ExtensionLoader<T> {
         return getExtensionClasses().containsKey(name);
     }
 
+    /**
+     * 注入依赖对象
+     * 1、对所有的 set 方法(非 @DisableInject 注解标注)进行依赖注入
+     * 2、set 方法的参数作为类型，方法名作为 SPI 属性名（例如 setXyZf 方法，对应的属性名 xyZf）
+     * 3、通过 objectFactory#getExtension() 方法来获取对应的 SPI 实现/spring 容器 bean，找的到就注入，否则不注入
+     *  3.1 objectFactory#getExtension 实际上调用的是 AdaptiveExtensionFactory#getExtension()
+     *
+     * @param instance
+     * @return
+     */
     private T injectExtension(T instance) {
 
         if (objectFactory == null) {
