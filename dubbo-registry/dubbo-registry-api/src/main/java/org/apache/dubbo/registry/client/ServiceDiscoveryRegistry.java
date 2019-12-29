@@ -773,7 +773,7 @@ public class ServiceDiscoveryRegistry extends FailbackRegistry {
         }
     }
 
-    private <T> T executeShared(Supplier<T> supplier) {
+    private List<URL> executeShared(Supplier<List<URL>> supplier) {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
